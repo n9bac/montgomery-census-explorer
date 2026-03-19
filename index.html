@@ -3,27 +3,28 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Montgomery County Spatial Analysis</title>
-    
+    <title>Montgomery County Census Map</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    
-    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
     <style>
-        #map { height: 100%; width: 100%; background: #f8fafc; }
+        #map { height: 100vh; width: 100%; background: #f8fafc; }
         .custom-tooltip { 
             background: white !important; 
-            border: 1px solid #e2e8f0 !important; 
+            border: none !important; 
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15) !important;
             border-radius: 8px !important;
-            padding: 8px !important;
+            padding: 12px !important;
+            font-family: sans-serif !important;
         }
+        .legend-pill { width: 12px; height: 12px; border-radius: 3px; }
     </style>
 </head>
-<body class="bg-slate-50">
+<body class="m-0 p-0 overflow-hidden">
     <div id="root"></div>
 
     <script type="text/babel">
@@ -32,30 +33,33 @@
         const API_KEY = "c113b395a568d62a02db2a565e8e600f5e1ae9f1";
 
         const App = () => {
-            const [loading, setLoading] = useState(false);
-            const [hasData, setHasData] = useState(false);
+            const [loading, setLoading] = useState(true);
             const mapRef = useRef(null);
             const geoJsonLayerRef = useRef(null);
 
-            useEffect(() => {
-                if (!mapRef.current) {
-                    mapRef.current = L.map('map').setView([32.3668, -86.3000], 11);
-                    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-                        attribution: '&copy; OpenStreetMap'
-                    }).addTo(mapRef.current);
-                }
-            }, []);
-
+            // Coloring logic for Income
             const getColor = (d) => {
-                return d > 80000 ? '#006d2c' :
-                       d > 60000 ? '#31a354' :
-                       d > 40000 ? '#74c476' :
-                       d > 20000 ? '#bae4b3' : '#edf8e9';
+                return d > 80000 ? '#065f46' :
+                       d > 60000 ? '#059669' :
+                       d > 40000 ? '#34d399' :
+                       d > 20000 ? '#a7f3d0' : '#ecfdf5';
             };
 
+            useEffect(() => {
+                // Initialize Map
+                mapRef.current = L.map('map', { zoomControl: false }).setView([32.3668, -86.3000], 11);
+                L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+                    attribution: '&copy; OpenStreetMap'
+                }).addTo(mapRef.current);
+                L.control.zoom({ position: 'bottomleft' }).addTo(mapRef.current);
+
+                fetchData();
+            }, []);
+
             const fetchData = async () => {
-                setLoading(true);
-                const acsUrl = `https://api.census.gov/data/2022/acs/acs5?get=NAME,B19013_001E,B01002_001E,B01003_001E&for=tract:*&in=state:01&in=county:101&key=${API_KEY}`;
+                // B19013_001E: Income | B01002_001E: Age | B01003_001E: Pop | B15003_022E: Bachelors
+                // B15003_001E: Total Education Population (for percentage)
+                const acsUrl = `https://api.census.gov/data/2022/acs/acs5?get=NAME,B19013_001E,B01002_001E,B01003_001E,B15003_022E,B15003_001E&for=tract:*&in=state:01&in=county:101&key=${API_KEY}`;
                 const tigerUrl = `https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Tracts_Blocks/MapServer/4/query?where=STATE%3D'01'%20AND%20COUNTY%3D'101'&outFields=GEOID,TRACT&returnGeometry=true&outSR=4326&f=geojson`;
 
                 try {
@@ -65,60 +69,87 @@
 
                     const statsLookup = new Map();
                     acsData.slice(1).forEach(row => {
-                        const geoid = `${row[4]}${row[5]}${row[6]}`;
+                        const geoid = `${row[6]}${row[7]}${row[8]}`; // state+county+tract
+                        const bachelors = parseFloat(row[4]);
+                        const totalEdu = parseFloat(row[5]);
                         statsLookup.set(geoid, {
                             income: parseFloat(row[1]),
                             age: parseFloat(row[2]),
-                            pop: parseInt(row[3])
+                            pop: parseInt(row[3]),
+                            bachPercent: totalEdu > 0 ? ((bachelors / totalEdu) * 100).toFixed(1) : 0
                         });
                     });
-
-                    if (geoJsonLayerRef.current) mapRef.current.removeLayer(geoJsonLayerRef.current);
 
                     geoJsonLayerRef.current = L.geoJson(tigerData, {
                         style: (f) => ({
                             fillColor: getColor(statsLookup.get(f.properties.GEOID)?.income || 0),
-                            weight: 1, color: 'white', fillOpacity: 0.7
+                            weight: 1.5, color: 'white', fillOpacity: 0.8
                         }),
                         onEachFeature: (f, layer) => {
                             const s = statsLookup.get(f.properties.GEOID);
                             layer.bindTooltip(`
-                                <b>Tract ${f.properties.TRACT}</b><br/>
-                                Income: $${s?.income?.toLocaleString() || 'N/A'}<br/>
-                                Pop: ${s?.pop?.toLocaleString() || 'N/A'}
+                                <div style="min-width:140px">
+                                    <div style="font-weight:bold; color:#1e293b; border-bottom:1px solid #e2e8f0; margin-bottom:8px; padding-bottom:4px">
+                                        Tract ${f.properties.TRACT}
+                                    </div>
+                                    <div style="color:#059669; font-size:13px"><b>Income:</b> $${s?.income?.toLocaleString() || 'N/A'}</div>
+                                    <div style="color:#475569; font-size:12px"><b>Median Age:</b> ${s?.age || 'N/A'} yrs</div>
+                                    <div style="color:#2563eb; font-size:12px"><b>Bachelors:</b> ${s?.bachPercent}%</div>
+                                    <div style="color:#64748b; font-size:12px"><b>Population:</b> ${s?.pop?.toLocaleString() || 'N/A'}</div>
+                                </div>
                             `, { sticky: true, className: 'custom-tooltip' });
+                            
+                            layer.on({
+                                mouseover: (e) => e.target.setStyle({ weight: 3, color: '#1e293b', fillOpacity: 0.9 }),
+                                mouseout: (e) => e.target.setStyle({ weight: 1.5, color: 'white', fillOpacity: 0.8 })
+                            });
                         }
                     }).addTo(mapRef.current);
 
-                    setHasData(true);
-                } catch (e) {
-                    console.error(e);
-                } finally {
                     setLoading(false);
+                } catch (e) {
+                    console.error("Fetch Error:", e);
                 }
             };
 
             return (
-                <div className="flex flex-col h-screen">
-                    <header className="bg-white border-b p-4 flex justify-between items-center shadow-sm z-[1001]">
-                        <div>
-                            <h1 className="text-xl font-bold text-slate-800">Montgomery Census Map</h1>
-                        </div>
-                        {!hasData && !loading && (
-                            <button onClick={fetchData} className="bg-blue-600 text-white px-6 py-2 rounded-full font-medium">
-                                Load Census Data
-                            </button>
-                        )}
-                    </header>
-
-                    <main className="flex-1 relative">
-                        {loading && (
-                            <div className="absolute inset-0 z-[2000] bg-white/80 flex items-center justify-center font-bold">
-                                Loading Data...
+                <div className="relative w-full h-screen">
+                    {/* Header Overlay */}
+                    <div className="absolute top-4 left-4 z-[1000] bg-white/90 backdrop-blur-md p-4 rounded-xl shadow-xl border border-slate-200 max-w-xs">
+                        <h1 className="font-bold text-slate-800 text-lg leading-tight">Montgomery County</h1>
+                        <p className="text-xs text-slate-500 mb-3">2022 Census Data Dashboard</p>
+                        
+                        {/* Legend */}
+                        <div className="space-y-2 border-t pt-3">
+                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Median Income</p>
+                            <div className="flex items-center gap-3 text-xs text-slate-600">
+                                <div className="legend-pill" style={{background:'#065f46'}}></div> <span>$80k+</span>
                             </div>
-                        )}
-                        <div id="map"></div>
-                    </main>
+                            <div className="flex items-center gap-3 text-xs text-slate-600">
+                                <div className="legend-pill" style={{background:'#059669'}}></div> <span>$60k - $80k</span>
+                            </div>
+                            <div className="flex items-center gap-3 text-xs text-slate-600">
+                                <div className="legend-pill" style={{background:'#34d399'}}></div> <span>$40k - $60k</span>
+                            </div>
+                            <div className="flex items-center gap-3 text-xs text-slate-600">
+                                <div className="legend-pill" style={{background:'#a7f3d0'}}></div> <span>$20k - $40k</span>
+                            </div>
+                            <div className="flex items-center gap-3 text-xs text-slate-600">
+                                <div className="legend-pill" style={{background:'#ecfdf5'}}></div> <span>Under $20k</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    {loading && (
+                        <div className="absolute inset-0 z-[2000] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center">
+                            <div className="bg-white px-8 py-4 rounded-2xl shadow-2xl flex items-center gap-3">
+                                <div className="w-5 h-5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                                <span className="font-bold text-slate-700">Analyzing Tracts...</span>
+                            </div>
+                        </div>
+                    )}
+
+                    <div id="map"></div>
                 </div>
             );
         };
